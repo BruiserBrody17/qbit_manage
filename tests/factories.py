@@ -22,6 +22,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+from modules.rate_limiter import RateLimiter
+
 FIXTURES_DIR = Path(__file__).parent / "fixtures" / "qbit_api"
 
 
@@ -319,6 +321,9 @@ class FakeConfig:
     )
     # webhooks_factory stand-in
     webhooks_factory: Any = field(default_factory=_FakeWebhooksFactory)
+    # Rate limiters — disabled (no-op) by default in tests
+    qbt_rate_limiter: Any = field(default_factory=lambda: RateLimiter(rate=0, burst=0))
+    webhook_rate_limiter: Any = field(default_factory=lambda: RateLimiter(rate=0, burst=0))
 
     def send_notifications(self, attr):
         self.notifications_sent.append(copy.deepcopy(attr))

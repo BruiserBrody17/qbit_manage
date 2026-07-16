@@ -41,6 +41,7 @@ class Webhooks:
         retry_attempts = 6
         request_delay = 2
         for retry_count in range(retry_attempts):
+            self.config.webhook_rate_limiter.acquire()
             if webhook == "notifiarr":
                 response = self.notifiarr.notification(json=json)
             else:

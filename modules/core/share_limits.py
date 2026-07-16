@@ -412,15 +412,18 @@ class ShareLimits:
             # Remove previous share_limits tag
             tag = is_tag_in_torrent(self.share_limits_tag, torrent.tags, exact=False)
             if tag:
+                self.config.qbt_rate_limiter.acquire()
                 torrent.remove_tags(tag)
                 tags_changed = True
             # Check if any of the previous share limits custom tags are there
             for custom_tag in self.share_limits_custom_tags:
                 if is_tag_in_torrent(custom_tag, torrent.tags):
+                    self.config.qbt_rate_limiter.acquire()
                     torrent.remove_tags(custom_tag)
                     tags_changed = True
             # Will tag the torrent with the group name if add_group_to_tag is True
             if self.group_tag:
+                self.config.qbt_rate_limiter.acquire()
                 torrent.add_tags(self.group_tag)
                 tags_changed = True
         return tags_changed
@@ -480,12 +483,14 @@ class ShareLimits:
                     # Clear share limits to prevent qBittorrent from pausing again, then apply throttle
                     if not self.config.dry_run:
                         # Allow continued seeding by removing share limits
+                        self.config.qbt_rate_limiter.acquire()
                         torrent.set_share_limits(
                             ratio_limit=-1,
                             seeding_time_limit=-1,
                             inactive_seeding_time_limit=-1,
                             share_limit_action="Default",
                         )
+                        self.config.qbt_rate_limiter.acquire()
                         torrent.set_upload_limit(limit_val)
         else:
             self.set_limits(
@@ -499,6 +504,7 @@ class ShareLimits:
         # Resume torrent if it was paused now that the share limit has changed
         if torrent.state_enum.is_complete and group_config["resume_torrent_after_change"]:
             if not self.config.dry_run:
+                self.config.qbt_rate_limiter.acquire()
                 torrent.resume()
 
     def assign_torrents_to_group(self, torrent_list):
@@ -666,10 +672,12 @@ class ShareLimits:
                 return []
             torrent_upload_limit = -1 if round(torrent.up_limit / 1024) == 0 else round(torrent.up_limit / 1024)
             if limit_upload_speed is not None and limit_upload_speed != torrent_upload_limit:
+                self.config.qbt_rate_limiter.acquire()
                 if limit_upload_speed == -1:
                     torrent.set_upload_limit(-1)
                 else:
                     torrent.set_upload_limit(limit_upload_speed * 1024)
+            self.config.qbt_rate_limiter.acquire()
             torrent.set_share_limits(
                 ratio_limit=max_ratio,
                 seeding_time_limit=max_seeding_time,
@@ -706,6 +714,7 @@ class ShareLimits:
             nonlocal torrent_tags
             if is_tag_in_torrent(tag, torrent_tags):
                 if not self.config.dry_run:
+                    self.config.qbt_rate_limiter.acquire()
                     torrent.remove_tags(tags=tag)
 
         def _add_tag_and_reset_limits(tag, reason_msg):
@@ -717,8 +726,10 @@ class ShareLimits:
                 logger.print_line(logger.insert_space(reason_msg, 8), self.config.loglevel)
                 logger.print_line(logger.insert_space(f"Adding Tag: {tag}", 8), self.config.loglevel)
                 if not self.config.dry_run:
+                    self.config.qbt_rate_limiter.acquire()
                     torrent.add_tags(tag)
                     torrent_tags += f", {tag}"
+                    self.config.qbt_rate_limiter.acquire()
                     torrent.set_share_limits(
                         ratio_limit=-1,
                         seeding_time_limit=-1,
@@ -726,8 +737,10 @@ class ShareLimits:
                         share_limit_action="Default",
                     )
                     if reset_upload_speed_on_unmet_minimums:
+                        self.config.qbt_rate_limiter.acquire()
                         torrent.set_upload_limit(-1)
                     if resume_torrent:
+                        self.config.qbt_rate_limiter.acquire()
                         torrent.resume()
 
         def _has_reached_min_seeding_time_limit():

@@ -12,6 +12,7 @@ from modules import util
 from modules.apprise import Apprise
 from modules.notifiarr import Notifiarr
 from modules.qbittorrent import Qbt
+from modules.rate_limiter import RateLimiter
 from modules.util import YAML
 from modules.util import Failed
 from modules.util import check
@@ -131,6 +132,7 @@ class Config:
         self.processs_config_recyclebin()
         self.process_config_directories()
         self.process_config_orphaned()
+        self.process_config_rate_limits()
 
     def configure_qbt(self):
         """
@@ -1057,6 +1059,67 @@ class Config:
                 if exclude_recycle not in self.orphaned["exclude_patterns"]
                 else self.orphaned["exclude_patterns"]
             )
+
+    def process_config_rate_limits(self):
+        """
+        Process the rate_limit configuration section.
+
+        Instantiates two RateLimiter objects on the Config object:
+          - self.qbt_rate_limiter  — for qBittorrent API mutation calls
+          - self.webhook_rate_limiter — for webhook / notification calls
+
+        Both limiters are no-ops when rate_limit.enabled is False (the default).
+        """
+        enabled = self.util.check_for_attribute(
+            self.data,
+            "enabled",
+            parent="rate_limit",
+            var_type="bool",
+            default=False,
+            do_print=False,
+        )
+
+        if not enabled:
+            self.qbt_rate_limiter = RateLimiter(rate=0, burst=0)
+            self.webhook_rate_limiter = RateLimiter(rate=0, burst=0)
+            return
+
+        qbt_rps = self.util.check_for_attribute(
+            self.data,
+            "qbt_requests_per_second",
+            parent="rate_limit",
+            var_type="int",
+            default=10,
+            min_int=1,
+        )
+        qbt_burst = self.util.check_for_attribute(
+            self.data,
+            "qbt_burst",
+            parent="rate_limit",
+            var_type="int",
+            default=20,
+            min_int=1,
+        )
+        webhook_rps = self.util.check_for_attribute(
+            self.data,
+            "webhook_requests_per_second",
+            parent="rate_limit",
+            var_type="int",
+            default=5,
+            min_int=1,
+        )
+        webhook_burst = self.util.check_for_attribute(
+            self.data,
+            "webhook_burst",
+            parent="rate_limit",
+            var_type="int",
+            default=10,
+            min_int=1,
+        )
+
+        self.qbt_rate_limiter = RateLimiter(rate=qbt_rps, burst=qbt_burst)
+        self.webhook_rate_limiter = RateLimiter(rate=webhook_rps, burst=webhook_burst)
+        logger.debug(f"Rate limiting enabled: qbt={qbt_rps}rps/burst={qbt_burst}, webhook={webhook_rps}rps/burst={webhook_burst}")
 
     def __retry_on_connect(exception):
         return isinstance(exception.__cause__, ConnectionError)

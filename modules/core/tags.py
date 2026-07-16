@@ -45,6 +45,7 @@ class Tags:
                 body += logger.print_line(logger.insert_space(f"Removing Tag: {self.stalled_tag}", 3), self.config.loglevel)
                 body += logger.print_line(logger.insert_space(f"Tracker: {tracker['url']}", 8), self.config.loglevel)
                 if not self.config.dry_run:
+                    self.config.qbt_rate_limiter.acquire()
                     torrent.remove_tags(self.stalled_tag)
             if (
                 torrent.tags == ""
@@ -76,6 +77,7 @@ class Tags:
                     )
                     body += logger.print_line(logger.insert_space(f"Tracker: {tracker['url']}", 8), self.config.loglevel)
                     if not self.config.dry_run:
+                        self.config.qbt_rate_limiter.acquire()
                         torrent.add_tags(tags_to_add)
                     category = self.qbt.get_category(torrent.save_path)[0] if torrent.category == "" else torrent.category
                     attr = {

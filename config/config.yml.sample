@@ -362,6 +362,19 @@ notifiarr:
   # <OPTIONAL> Set to a unique value (could be your username on notifiarr for example)
   instance:
 
+# rate_limit:
+#   # Enable or disable rate limiting for outbound API and webhook calls (default: false)
+#   # When disabled, no throttling is applied and existing behavior is unchanged.
+#   enabled: false
+#   # qBittorrent API calls: max sustained requests per second (default: 10)
+#   qbt_requests_per_second: 10
+#   # qBittorrent API burst size — max tokens that can accumulate (default: 20)
+#   qbt_burst: 20
+#   # Webhook/notification calls: max sustained requests per second (default: 5)
+#   webhook_requests_per_second: 5
+#   # Webhook burst size (default: 10)
+#   webhook_burst: 10
+
 webhooks:
   # Webhook notifications:
   # Possible values:
