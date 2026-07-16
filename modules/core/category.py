@@ -98,6 +98,7 @@ class Category:
 
             @handle_qbit_api_errors(context="set_category", retry_attempts=2)
             def set_category_with_creation():
+                self.config.qbt_rate_limiter.acquire()
                 try:
                     torrent.set_category(category=new_cat)
                     if (
@@ -105,6 +106,7 @@ class Category:
                         and self.config.settings["force_auto_tmm"]
                         and not any(tag in torrent.tags for tag in self.config.settings.get("force_auto_tmm_ignore_tags", []))
                     ):
+                        self.config.qbt_rate_limiter.acquire()
                         torrent.set_auto_management(True)
                 except Conflict409Error:
                     # Conflict409Error with "Incorrect category name" means category doesn't exist
@@ -114,6 +116,7 @@ class Category:
                     )
                     self.config.notify(ex, "Update Category", False)
                     self.client.torrent_categories.create_category(name=new_cat, save_path=torrent.save_path)
+                    self.config.qbt_rate_limiter.acquire()
                     torrent.set_category(category=new_cat)
                 except Exception as e:
                     # Check if it's a category creation issue (fallback for other error types)
@@ -125,6 +128,7 @@ class Category:
                         )
                         self.config.notify(ex, "Update Category", False)
                         self.client.torrent_categories.create_category(name=new_cat, save_path=torrent.save_path)
+                        self.config.qbt_rate_limiter.acquire()
                         torrent.set_category(category=new_cat)
                     else:
                         raise

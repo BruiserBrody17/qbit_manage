@@ -43,6 +43,7 @@ class TagNoHardLinks:
         title = "Tagging Torrents with No Hardlinks"
         body.append(logger.insert_space(f"Tracker: {tracker['url']}", 8))
         if not self.config.dry_run:
+            self.config.qbt_rate_limiter.acquire()
             torrent.add_tags(self.nohardlinks_tag)
         self.stats_tagged += 1
         for rcd in body:
@@ -76,6 +77,7 @@ class TagNoHardLinks:
             body += logger.print_line(logger.insert_space(f"{tag_action}: {self.nohardlinks_tag}", 6), self.config.loglevel)
             body += logger.print_line(logger.insert_space(f"Tracker: {tracker['url']}", 8), self.config.loglevel)
             if not self.config.dry_run:
+                self.config.qbt_rate_limiter.acquire()
                 torrent.remove_tags(tags=self.nohardlinks_tag)
             attr = {
                 "function": "untag_nohardlinks",

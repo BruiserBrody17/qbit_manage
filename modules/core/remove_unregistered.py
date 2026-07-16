@@ -73,6 +73,7 @@ class RemoveUnregistered:
                 body += logger.print_line(logger.insert_space(f"Removed Tag: {self.tag_error}", 4), self.config.loglevel)
                 body += logger.print_line(logger.insert_space(f"Tracker: {tracker['url']}", 8), self.config.loglevel)
                 if not self.config.dry_run:
+                    self.config.qbt_rate_limiter.acquire()
                     torrent.remove_tags(tags=self.tag_error)
                 attr = {
                     "function": "untag_tracker_error",
@@ -302,6 +303,7 @@ class RemoveUnregistered:
         self.torrents_updated_issue.append(self.t_name)
         self.notify_attr_issue.append(attr)
         if not self.config.dry_run:
+            self.config.qbt_rate_limiter.acquire()
             torrent.add_tags(tags=self.tag_error)
 
     def del_unregistered(self, msg, tracker, torrent):
@@ -325,18 +327,21 @@ class RemoveUnregistered:
             if "" in self.t_msg or 2 in self.t_status:
                 attr["torrents_deleted_and_contents"] = False
                 if not self.config.dry_run:
+                    self.config.qbt_rate_limiter.acquire()
                     self.qbt.tor_delete_recycle(torrent, attr)
                 body += logger.print_line(logger.insert_space("Deleted .torrent but NOT content files.", 8), self.config.loglevel)
                 self.stats_deleted += 1
             else:
                 attr["torrents_deleted_and_contents"] = True
                 if not self.config.dry_run:
+                    self.config.qbt_rate_limiter.acquire()
                     self.qbt.tor_delete_recycle(torrent, attr)
                 body += logger.print_line(logger.insert_space("Deleted .torrent AND content files.", 8), self.config.loglevel)
                 self.stats_deleted_contents += 1
         else:
             attr["torrents_deleted_and_contents"] = True
             if not self.config.dry_run:
+                self.config.qbt_rate_limiter.acquire()
                 self.qbt.tor_delete_recycle(torrent, attr)
             body += logger.print_line(logger.insert_space("Deleted .torrent AND content files.", 8), self.config.loglevel)
             self.stats_deleted_contents += 1

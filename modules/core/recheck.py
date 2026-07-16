@@ -61,6 +61,7 @@ class ReCheck:
                             self.torrents_updated_resume.append(t_name)
                             self.notify_attr_resume.append(attr)
                             if not self.config.dry_run:
+                                self.config.qbt_rate_limiter.acquire()
                                 torrent.resume()
                         else:
                             # Check to see if torrent meets AutoTorrentManagement criteria
@@ -112,6 +113,7 @@ class ReCheck:
                                 self.torrents_updated_resume.append(t_name)
                                 self.notify_attr_resume.append(attr)
                                 if not self.config.dry_run:
+                                    self.config.qbt_rate_limiter.acquire()
                                     torrent.resume()
                     # Recheck
                     elif (
@@ -137,6 +139,7 @@ class ReCheck:
                         self.torrents_updated_recheck.append(t_name)
                         self.notify_attr_recheck.append(attr)
                         if not self.config.dry_run:
+                            self.config.qbt_rate_limiter.acquire()
                             torrent.recheck()
 
         end_time = time.time()
