@@ -60,9 +60,10 @@ class RemoveOrphaned:
             root_files = set(util.get_root_files(self.root_dir, self.remote_dir, self.orphaned_dir))
         logger.trace(f"Found {len(torrent_list)} torrents and {len(root_files)} files under root_dir")
 
-        # Process torrent files (parallel if executor available, synchronous otherwise)
+        # Process torrent files (parallel if executor available and rate limiting is disabled, synchronous otherwise)
         torrent_files = set()
-        if self.executor:
+        use_parallel = self.executor and not self.config.qbt_rate_limiter._enabled
+        if use_parallel:
             for fullpath_list in self.executor.map(self.get_full_path_of_torrent_files, torrent_list):
                 torrent_files.update(fullpath_list)
         else:
@@ -340,6 +341,7 @@ class RemoveOrphaned:
 
     def get_full_path_of_torrent_files(self, torrent):
         """Get full paths for torrent files with improved path handling"""
+        self.config.qbt_rate_limiter.acquire()
         # Use download_path for incomplete torrents so that files actively
         # downloading to a separate directory are not incorrectly flagged as
         # orphans.
