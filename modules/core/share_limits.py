@@ -672,10 +672,11 @@ class ShareLimits:
                 return []
             torrent_upload_limit = -1 if round(torrent.up_limit / 1024) == 0 else round(torrent.up_limit / 1024)
             if limit_upload_speed is not None and limit_upload_speed != torrent_upload_limit:
-                self.config.qbt_rate_limiter.acquire()
                 if limit_upload_speed == -1:
+                    self.config.qbt_rate_limiter.acquire()
                     torrent.set_upload_limit(-1)
                 else:
+                    self.config.qbt_rate_limiter.acquire()
                     torrent.set_upload_limit(limit_upload_speed * 1024)
             self.config.qbt_rate_limiter.acquire()
             torrent.set_share_limits(
