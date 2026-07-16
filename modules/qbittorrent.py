@@ -165,6 +165,7 @@ class Qbt:
                 # check whether the torrent has a matching tag to ignore force_auto_tmm.
                 and not any(tag in torrent.tags for tag in self.config.settings.get("force_auto_tmm_ignore_tags", []))
             ):
+                self.config.qbt_rate_limiter.acquire()
                 torrent.set_auto_management(True)
             try:
                 torrent_name = torrent.name
@@ -172,6 +173,7 @@ class Qbt:
                 torrent_is_complete = torrent.state_enum.is_complete
                 save_path = torrent.save_path
                 category = torrent.category
+                self.config.qbt_rate_limiter.acquire()
                 torrent_trackers = torrent.trackers
                 self.add_torrent_files(torrent_hash, torrent.files, save_path)
             except Exception as ex:
