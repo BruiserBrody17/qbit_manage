@@ -1279,7 +1279,10 @@ class Config:
 
         self.qbt_rate_limiter = RateLimiter(rate=qbt_rps, burst=qbt_burst)
         self.webhook_rate_limiter = RateLimiter(rate=webhook_rps, burst=webhook_burst)
-        logger.debug(f"Rate limiting enabled: qbt={qbt_rps}rps/burst={qbt_burst}, webhook={webhook_rps}rps/burst={webhook_burst}")
+        logger.info(
+            f"Rate limiting enabled: qBittorrent={qbt_rps} req/s (burst {qbt_burst}), "
+            f"Webhook={webhook_rps} req/s (burst {webhook_burst})"
+        )
 
     def __retry_on_connect(exception):
         return isinstance(exception.__cause__, ConnectionError)

@@ -10,6 +10,7 @@ import pytest
 
 from modules.config import Config
 from modules.util import Failed
+from modules.util import check as ConfigCheck
 
 
 def _make_config(data: dict) -> Config:
@@ -122,3 +123,39 @@ class TestProcessConfigNohardlinks:
 
         with pytest.raises(Failed, match="ignore_category_dir must be a boolean type"):
             cfg.process_config_nohardlinks()
+
+
+class TestProcessConfigRateLimits:
+    """process_config_rate_limits() announces the active limits at startup."""
+
+    def _make_rate_limit_config(self, rate_limit: dict) -> Config:
+        cfg = _make_config({"rate_limit": rate_limit})
+        cfg.util = ConfigCheck(cfg)
+        return cfg
+
+    def test_disabled_by_default_is_a_noop(self):
+        cfg = self._make_rate_limit_config({"enabled": False})
+
+        cfg.process_config_rate_limits()
+
+        assert cfg.qbt_rate_limiter.enabled is False
+        assert cfg.webhook_rate_limiter.enabled is False
+
+    def test_enabled_logs_configured_limits(self, monkeypatch):
+        cfg = self._make_rate_limit_config(
+            {
+                "enabled": True,
+                "qbt_requests_per_second": 15,
+                "qbt_burst": 30,
+                "webhook_requests_per_second": 3,
+                "webhook_burst": 6,
+            }
+        )
+        logged = []
+        monkeypatch.setattr("modules.config.logger.info", lambda msg: logged.append(msg))
+
+        cfg.process_config_rate_limits()
+
+        assert cfg.qbt_rate_limiter.enabled is True
+        assert cfg.webhook_rate_limiter.enabled is True
+        assert any("15 req/s (burst 30)" in msg and "3 req/s (burst 6)" in msg for msg in logged)

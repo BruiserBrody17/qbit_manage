@@ -23,6 +23,7 @@ import { nohardlinksSchema } from '../config-schemas/nohardlinks.js';
 import { shareLimitsSchema } from '../config-schemas/share_limits.js';
 import { recyclebinSchema } from '../config-schemas/recyclebin.js';
 import { orphanedSchema } from '../config-schemas/orphaned.js';
+import { rateLimitSchema } from '../config-schemas/rate_limit.js';
 import { notificationsSchema } from '../config-schemas/notifications.js';
 import { ShareLimitsComponent } from './share-limits.js';
 import { escapeHtml } from '../utils/utils.js';
@@ -58,6 +59,7 @@ class ConfigForm {
             share_limits: shareLimitsSchema,
             recyclebin: recyclebinSchema,
             orphaned: orphanedSchema,
+            rate_limit: rateLimitSchema,
             notifications: notificationsSchema,
         };
 

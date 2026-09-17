@@ -77,7 +77,7 @@ class RemoveOrphaned:
 
         # Process torrent files (parallel if executor available and rate limiting is disabled, synchronous otherwise)
         torrent_files = set()
-        use_parallel = self.executor and not self.config.qbt_rate_limiter._enabled
+        use_parallel = self.executor and not self.config.qbt_rate_limiter.enabled
         if use_parallel:
             for fullpath_list in self.executor.map(self.get_full_path_of_torrent_files, torrent_list):
                 torrent_files.update(fullpath_list)

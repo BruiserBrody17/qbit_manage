@@ -478,6 +478,20 @@ This is handy when you have automatically generated files that certain OSs decid
 > [!TIP]
 > The more time you place for the `empty_after_x_days:` variable the better, allowing you more time to catch any mistakes by the script. If the variable is set to `0` it will delete contents immediately after every script run. If the variable is not set it will never delete the contents of the Orphaned Data.
 
+## **rate_limit:**
+
+---
+
+Throttles outbound qBittorrent API calls and webhook/notification calls using a token-bucket limiter, so qbm doesn't overwhelm qBittorrent or downstream notification services on large libraries. Disabled by default; when disabled, no throttling is applied and existing behavior is unchanged.
+
+| Variable                      | Definition                                                                | Default Values | Required            |
+| :----------------------------- | :------------------------------------------------------------------------ | :-------------- | :------------------ |
+| `enabled`                      | Enable or disable rate limiting for outbound API and webhook calls        | False           | <center>❌</center> |
+| `qbt_requests_per_second`      | Maximum sustained qBittorrent API requests per second                     | 10              | <center>❌</center> |
+| `qbt_burst`                    | Maximum burst size (token bucket capacity) for qBittorrent API requests   | 20              | <center>❌</center> |
+| `webhook_requests_per_second`  | Maximum sustained webhook/notification requests per second                | 5               | <center>❌</center> |
+| `webhook_burst`                | Maximum burst size (token bucket capacity) for webhook/notification calls | 10              | <center>❌</center> |
+
 ## **apprise:**
 
 ---

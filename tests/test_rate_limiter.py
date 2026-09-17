@@ -18,7 +18,7 @@ class TestRateLimiterDisabled:
 
     def test_zero_rate_is_noop(self):
         rl = RateLimiter(rate=0, burst=0)
-        assert not rl._enabled
+        assert not rl.enabled
         # acquire should return instantly without sleeping
         start = time.monotonic()
         for _ in range(100):
@@ -28,7 +28,7 @@ class TestRateLimiterDisabled:
 
     def test_none_rate_is_noop(self):
         rl = RateLimiter(rate=None, burst=None)
-        assert not rl._enabled
+        assert not rl.enabled
         start = time.monotonic()
         rl.acquire()
         elapsed = time.monotonic() - start
@@ -84,7 +84,7 @@ class TestRateLimiterEnabled:
 
     def test_enabled_flag(self):
         rl = RateLimiter(rate=5, burst=10)
-        assert rl._enabled
+        assert rl.enabled
 
     def test_burst_defaults_to_rate_when_none(self):
         rl = RateLimiter(rate=7, burst=None)

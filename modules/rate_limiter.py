@@ -29,6 +29,11 @@ class RateLimiter:
         self._last = time.monotonic()
         self._lock = threading.Lock()
 
+    @property
+    def enabled(self):
+        """Whether this limiter is actively throttling (rate > 0)."""
+        return self._enabled
+
     def acquire(self):
         """Block until a token is available.
 
