@@ -15,12 +15,34 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: develop-release
+  cancel-in-progress: false
 
 jobs:
+  resolve-develop:
+    name: Resolve develop commit
+    if: >-
+      github.repository == 'StuffAnThings/qbit_manage' &&
+      (github.event_name == 'workflow_dispatch' ||
+       github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      sha: ${{ steps.head.outputs.sha }}
+    steps:
+      - name: Check Out develop tip
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: develop
+
+      - name: Record develop HEAD
+        id: head
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
   build-release-assets:
     name: Build develop assets
+    needs: resolve-develop
     # Upstream-only: forks shouldn't burn ~5 OS-runners on every develop push.
     if: >-
       github.repository == 'StuffAnThings/qbit_manage' &&
@@ -31,13 +53,11 @@ jobs:
       actions: write
     uses: ./.github/workflows/build-binaries.yml
     with:
-      # workflow_run.head_sha is the *triggering* commit (pre-bump merge); checkout
-      # the develop branch tip so we build after bump-version-develop.yml has pushed.
-      ref: develop
+      ref: ${{ needs.resolve-develop.outputs.sha }}
 
   develop-prerelease:
     name: Update rolling develop pre-release
-    needs: build-release-assets
+    needs: [resolve-develop, build-release-assets]
     # Upstream-only: rolling pre-release lives on the upstream repo.
     if: >-
       github.repository == 'StuffAnThings/qbit_manage' &&
@@ -47,14 +67,59 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Check Out develop tip
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - name: Check out pinned develop SHA
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: develop
+          ref: ${{ needs.resolve-develop.outputs.sha }}
+          # Full history + tags so the changelog ranges below can be computed.
+          fetch-depth: 0
 
-      - name: Record develop HEAD
-        id: head
-        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Fetch changelog reference points
+        run: git fetch --tags --force origin master
+
+      - name: Resolve changelog boundaries
+        id: bounds
+        env:
+          GH_TOKEN: ${{ secrets.PAT || secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION="$(cat VERSION)"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+          # Last stable tag reachable from master, used only for the section heading.
+          LAST_STABLE="$(git describe --tags --abbrev=0 --match 'v*' origin/master 2>/dev/null || echo '')"
+          echo "stable_heading=## Changes since last stable release${LAST_STABLE:+ ($LAST_STABLE)}" >> "$GITHUB_OUTPUT"
+
+          # Target of the current rolling develop pre-release, captured BEFORE it is
+          # deleted+recreated below, so "since the previous develop build" has a
+          # start point. Skipped when the release is missing, or the recorded commit
+          # is not in this checkout (a force-reset develop can orphan the old build).
+          PREV_SHA="$(gh release view latest-develop --json targetCommitish -q '.targetCommitish' 2>/dev/null || echo '')"
+          if [[ -n "$PREV_SHA" ]] && git rev-parse -q --verify "${PREV_SHA}^{commit}" >/dev/null 2>&1; then
+            echo "prev_sha=$PREV_SHA" >> "$GITHUB_OUTPUT"
+            echo "dev_heading=## Changes since the previous develop build (\`${PREV_SHA:0:7}\`)" >> "$GITHUB_OUTPUT"
+          else
+            echo "prev_sha=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Changelog since last stable release
+        uses: ./.github/actions/release-notes
+        with:
+          new-version: ${{ steps.bounds.outputs.version }}
+          range: origin/master..${{ needs.resolve-develop.outputs.sha }}
+          heading: ${{ steps.bounds.outputs.stable_heading }}
+          empty-message: "No new commits since the last stable release."
+          outfile: /tmp/since_stable.md
+
+      - name: Changelog since previous develop build
+        if: steps.bounds.outputs.prev_sha != ''
+        uses: ./.github/actions/release-notes
+        with:
+          new-version: ${{ steps.bounds.outputs.version }}
+          range: ${{ steps.bounds.outputs.prev_sha }}..${{ needs.resolve-develop.outputs.sha }}
+          heading: ${{ steps.bounds.outputs.dev_heading }}
+          empty-message: "No new commits since the previous develop build."
+          outfile: /tmp/since_dev.md
 
       - name: Download prepared release assets
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -69,27 +134,49 @@ jobs:
           set -euo pipefail
           VERSION="$(cat VERSION)"
           TAG="latest-develop"
-          HEAD_SHA="${{ steps.head.outputs.sha }}"
+          HEAD_SHA="${{ needs.resolve-develop.outputs.sha }}"
+          RELEASE_ERROR="$(mktemp)"
+          NOTES_FILE="$(mktemp)"
+          trap 'rm -f "$RELEASE_ERROR" "$NOTES_FILE"' EXIT
+
+          # Assemble the rolling notes: build preamble + a "since last stable" and
+          # (when available) a "since the previous develop build" changelog section.
+          {
+            printf 'Rolling pre-release built from the latest `develop` commit (`%s`).\n' "$HEAD_SHA"
+            printf 'Auto-updated on every merge to develop — this is a development build, not a stable release.\n\n'
+            cat /tmp/since_stable.md
+            if [[ -f /tmp/since_dev.md ]]; then
+              printf '\n\n'
+              cat /tmp/since_dev.md
+            fi
+            printf '\n'
+          } > "$NOTES_FILE"
 
           # The GitHub API cannot move an existing tag to a new commit, so delete
           # the rolling release + its tag and recreate both at the current HEAD.
           # This keeps a single, always-current develop pre-release instead of one
           # per merge. The tag is intentionally non-`v*` so it never trips
           # tag.yml / version.yml / pypi-publish.yml.
-          # Delete only when it exists, so a real auth/permission error surfaces
-          # instead of being masked by `|| true`.
-          if gh release view "$TAG" >/dev/null 2>&1; then
+          # Only a missing release may skip deletion. Authentication, rate-limit,
+          # and transient API failures must stop the job with their original error.
+          if gh release view "$TAG" >/dev/null 2>"$RELEASE_ERROR"; then
             gh release delete "$TAG" --cleanup-tag --yes
+          elif grep -Eq 'release not found|HTTP 404' "$RELEASE_ERROR"; then
+            :
+          else
+            cat "$RELEASE_ERROR" >&2
+            exit 1
           fi
           gh release create "$TAG" \
             --target "$HEAD_SHA" \
             --title "Develop build ($VERSION)" \
-            --notes "Rolling pre-release built from the latest \`develop\` commit (\`$HEAD_SHA\`). Auto-updated on every merge to develop — this is a development build, not a stable release." \
+            --notes-file "$NOTES_FILE" \
             --prerelease \
             --latest=false \
             release-assets/*
 
   docker-develop:
+    needs: resolve-develop
     runs-on: ubuntu-latest
     # Upstream-only: DOCKER_HUB_USERNAME / GHCR_TOKEN aren't configured on forks.
     if: >-
@@ -102,46 +189,46 @@ jobs:
     steps:
       - name: set lower case owner name
         run: |
-          echo "OWNER_LC=${OWNER,,}" >>${GITHUB_ENV}
+          echo "OWNER_LC=${OWNER,,}" >>"${GITHUB_ENV}"
         env:
           OWNER: "${{ github.repository_owner }}"
 
-      - name: Check Out develop tip
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - name: Check out pinned develop SHA
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: develop
+          ref: ${{ needs.resolve-develop.outputs.sha }}
 
       - name: Login to Docker Hub
-        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
           username: ${{ secrets.DOCKER_HUB_USERNAME }}
           password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
 
       - name: Login to ghcr.io
-        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
           registry: ghcr.io
           username: ${{ env.OWNER_LC }}
           password: ${{ secrets.GHCR_TOKEN }}
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4
+        uses: docker/setup-qemu-action@1f40c72289eff860ee54a304f1438e3cff362e0a # v4
         with:
           platforms: all
 
       - name: Set up Docker Buildx
         id: buildx
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
 
       - name: Read version from VERSION file
         id: get_version
-        run: echo "APP_VERSION=$(cat VERSION)" >> $GITHUB_OUTPUT
+        run: echo "APP_VERSION=$(cat VERSION)" >> "$GITHUB_OUTPUT"
 
       - name: Set build metadata
         id: build_meta
         run: |
-          echo "BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> $GITHUB_OUTPUT
-          echo "VCS_REF=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
+          echo "BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_OUTPUT"
+          echo "VCS_REF=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Build and push
         id: docker_build

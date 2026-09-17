@@ -87,7 +87,7 @@ class FakeClient:
 class _Tracker:
     url: str
     status: int = 2  # 2 = working
-    msg: str = ""
+    msg: str | None = ""  # qbittorrentapi can return None
     num_seeds: int = 0
     num_peers: int = 0
     num_leeches: int = 0
@@ -324,6 +324,15 @@ class FakeConfig:
     # Rate limiters — disabled (no-op) by default in tests
     qbt_rate_limiter: Any = field(default_factory=lambda: RateLimiter(rate=0, burst=0))
     webhook_rate_limiter: Any = field(default_factory=lambda: RateLimiter(rate=0, burst=0))
+
+    def __post_init__(self):
+        # Normalize via the production validator (modules.config.normalize_cat_change)
+        # so the test factory and Config stay in lockstep — no stale local mirror that
+        # silently coerces invalid values (e.g. str(True)) or KeyErrors on a missing
+        # new_cat instead of raising the real Config Error.
+        from modules.config import normalize_cat_change
+
+        self.cat_change = normalize_cat_change(self.cat_change)
 
     def send_notifications(self, attr):
         self.notifications_sent.append(copy.deepcopy(attr))

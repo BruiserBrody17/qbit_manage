@@ -10,12 +10,85 @@ Coverage:
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 from unittest.mock import patch
 
 from modules.qbittorrent import Qbt
 from tests.factories import FakeTorrent
 from tests.factories import _Tracker
+
+
+def make_qbt_config():
+    return SimpleNamespace(
+        commands={
+            "skip_qb_version_check": False,
+            "share_limits": False,
+            "recheck": False,
+            "rem_unregistered": False,
+            "tag_tracker_error": False,
+            "tag_nohardlinks": False,
+        },
+        settings={"disable_qbt_default_share_limits": False},
+        notify=MagicMock(),
+    )
+
+
+def make_qbt_client():
+    client = MagicMock()
+    client.app.version = "v5.5.0"
+    client.app.web_api_version = "2.11.0"
+    client.app.preferences.max_ratio_act = 0
+    client.app.preferences.max_ratio_enabled = False
+    client.app.preferences.max_ratio = 0
+    client.app.preferences.max_seeding_time_enabled = False
+    client.app.preferences.max_seeding_time = 0
+    return client
+
+
+class TestAuthentication:
+    """Test Qbt authentication configuration."""
+
+    @patch("modules.qbittorrent.Version.is_app_version_supported", return_value=True)
+    @patch("modules.qbittorrent.Qbt.get_torrents", return_value=[])
+    @patch("modules.qbittorrent.Client")
+    @patch("modules.qbittorrent.logger.secret", create=True)
+    def test_passes_api_key_to_client(self, _mock_secret, mock_client, _mock_get_torrents, _mock_version_supported):
+        client = make_qbt_client()
+        mock_client.return_value = client
+
+        Qbt(
+            make_qbt_config(),
+            {"host": "localhost:8080", "username": None, "password": None, "api_key": "qbt_test_key"},
+        )
+
+        mock_client.assert_called_once_with(
+            host="localhost:8080",
+            username=None,
+            password=None,
+            api_key="qbt_test_key",
+            VERIFY_WEBUI_CERTIFICATE=False,
+            REQUESTS_ARGS={"timeout": (45, 60)},
+        )
+        client.auth_log_in.assert_called_once()
+
+    @patch("modules.qbittorrent.Version.is_app_version_supported", return_value=True)
+    @patch("modules.qbittorrent.Qbt.get_torrents", return_value=[])
+    @patch("modules.qbittorrent.logger.warning")
+    @patch("modules.qbittorrent.Client")
+    @patch("modules.qbittorrent.logger.secret", create=True)
+    def test_warns_when_api_key_and_password_credentials_are_set(
+        self, _mock_secret, mock_client, mock_warning, _mock_get_torrents, _mock_version_supported
+    ):
+        mock_client.return_value = make_qbt_client()
+
+        Qbt(
+            make_qbt_config(),
+            {"host": "localhost:8080", "username": "admin", "password": "password", "api_key": "qbt_test_key"},
+        )
+
+        mock_warning.assert_called_once_with("qBittorrent API key is set; it takes precedence over username and password.")
+
 
 # ---- get_tracker_urls tests --------------------------------------------------
 
@@ -251,6 +324,31 @@ class TestGetTorrentInfo:
 
         # Check that torrentvalid list was populated
         assert hasattr(qbt, "torrentvalid")
+
+    @patch("modules.qbittorrent.logger")
+    def test_none_tracker_msg_does_not_crash(self, mock_logger):
+        """A tracker with msg=None must not crash torrentinfo population (#1358)."""
+        torrent = FakeTorrent(
+            name="NoneMsgTorrent",
+            hash="hashnone",
+            trackers=[_Tracker(url="http://tracker1.example/announce", status=4, msg=None)],
+        )
+
+        qbt = MagicMock(spec=Qbt)
+        qbt.config = MagicMock()
+        qbt.config.settings = {
+            "force_auto_tmm": False,
+            "force_auto_tmm_ignore_tags": [],
+        }
+        qbt.config.dry_run = False
+        qbt.config.notify = MagicMock()
+        qbt.torrent_list = [torrent]
+        qbt.torrentfiles = {}
+        qbt.add_torrent_files = MagicMock()
+
+        Qbt.get_torrent_info(qbt)
+
+        assert isinstance(qbt.torrentinfo, dict)
 
     @patch("modules.qbittorrent.logger")
     def test_populates_torrentissue_list(self, mock_logger):

@@ -11,6 +11,7 @@ import os
 import time
 from types import SimpleNamespace
 
+from modules.core.remove_orphaned import find_orphaned_files
 from tests.factories import FakeConfig
 from tests.factories import FakeQbtManager
 from tests.factories import FakeTorrent
@@ -279,64 +280,69 @@ class TestHandleOrphanedFilesLogic:
 
 
 class TestFilterTooNew:
-    """Age protection and the inode-aware hardlink exception (gh#1095)."""
+    """Age protection for orphaned files (mtime-based, gh#1289 regression fix)."""
 
     def _ro(self, min_age_minutes):
         cfg = FakeConfig()
         cfg.orphaned["min_file_age_minutes"] = min_age_minutes
         return make_remove_orphaned(_make_qbt(config=cfg))
 
-    def test_hardlinked_orphan_with_tracked_sibling_is_not_protected(self, tmp_path):
-        """A too-new orphan that shares an inode with a tracked file is cleaned anyway."""
+    def test_new_orphan_protected_old_orphan_eligible(self, tmp_path):
         now = time.time()
-        # Tracked torrent file, freshly seeded (mtime = now).
-        tracked = tmp_path / "tracked.mkv"
-        tracked.write_text("data")
-        # Orphan hardlink to the tracked inode — shares the fresh mtime, so the
-        # age filter would otherwise protect it forever (the gh#1095 bug).
-        orphan_hardlink = tmp_path / "orphan_hardlink.mkv"
-        os.link(tracked, orphan_hardlink)
-        os.utime(tracked, (now, now))  # shared inode → updates both links
-        # A genuinely new, non-hardlinked orphan (stays protected).
         orphan_new = tmp_path / "orphan_new.mkv"
         orphan_new.write_text("x")
         os.utime(orphan_new, (now, now))
-        # An old, non-hardlinked orphan (old enough to delete).
         orphan_old = tmp_path / "orphan_old.mkv"
         orphan_old.write_text("y")
         old = now - 30 * 24 * 60 * 60
         os.utime(orphan_old, (old, old))
 
         ro = self._ro(min_age_minutes=14400)  # 10 days
-        orphaned = {str(orphan_hardlink), str(orphan_new), str(orphan_old)}
+        result = ro._filter_too_new({str(orphan_new), str(orphan_old)}, now)
 
-        result = ro._filter_too_new(orphaned, {str(tracked)}, now)
-
-        assert str(orphan_hardlink) in result  # stale hardlink of a tracked file → cleaned
         assert str(orphan_old) in result  # old enough → eligible
-        assert str(orphan_new) not in result  # genuinely too new → protected
+        assert str(orphan_new) not in result  # too new → protected
 
-    def test_hardlinked_orphan_without_tracked_sibling_stays_protected(self, tmp_path):
-        """nlink>1 alone is not enough — only a TRACKED sibling bypasses protection."""
+    def test_recent_hardlinked_orphan_is_protected(self, tmp_path):
+        """gh#1289 regression: a recently-appeared hardlinked orphan must be protected.
+
+        #1289 deleted any hardlinked orphan whose inode matched a tracked file,
+        ignoring age — which swept up cross-seed hardlinks before their torrent
+        registered. Plain age protection keeps it: the file is recent, so it's
+        skipped like any other new orphan, hardlink or not.
+        """
         now = time.time()
-        a = tmp_path / "a.mkv"
-        a.write_text("data")
-        b = tmp_path / "b.mkv"
-        os.link(a, b)  # two orphan hardlinks, neither tracked
-        os.utime(a, (now, now))
+        tracked = tmp_path / "tracked.mkv"
+        tracked.write_text("data")
+        orphan_hardlink = tmp_path / "orphan_hardlink.mkv"
+        os.link(tracked, orphan_hardlink)
+        recent = now - 60 * 60  # 1h old, under the threshold
+        os.utime(tracked, (recent, recent))  # shared inode → both links
 
-        ro = self._ro(min_age_minutes=14400)
+        ro = self._ro(min_age_minutes=360)  # 6h
+        result = ro._filter_too_new({str(orphan_hardlink)}, now)
 
-        result = ro._filter_too_new({str(a), str(b)}, set(), now)
-
-        assert result == set()  # both too new, no tracked inode → both protected
+        assert result == set()  # recent → protected regardless of hardlink status
 
     def test_age_protection_disabled_is_noop(self, tmp_path):
+        now = time.time()
         f = tmp_path / "f.mkv"
         f.write_text("z")
-        ro = self._ro(min_age_minutes=0)
+        os.utime(f, (now, now))
 
-        assert ro._filter_too_new({str(f)}, set(), time.time()) == {str(f)}
+        ro = self._ro(min_age_minutes=0)
+        result = ro._filter_too_new({str(f)}, now)
+
+        assert result == {str(f)}  # disabled → eligible even though brand new
+
+    def test_unreadable_file_is_left_eligible(self, tmp_path):
+        """A stat failure must not protect a file on bad data (fail toward normal handling)."""
+        ro = self._ro(min_age_minutes=14400)
+        missing = str(tmp_path / "does_not_exist.mkv")
+
+        result = ro._filter_too_new({missing}, time.time())
+
+        assert result == {missing}
 
     def test_too_new_orphan_protected_with_mapped_remote_dir(self, tmp_path):
         """Age protection must stat the remote_dir path, not the root_dir namespace."""
@@ -354,32 +360,67 @@ class TestFilterTooNew:
         cfg.orphaned["min_file_age_minutes"] = 14400
 
         ro = make_remove_orphaned(_make_qbt(config=cfg))
-        result = ro._filter_too_new({orphan_root}, set(), now)
+        result = ro._filter_too_new({orphan_root}, now)
 
         assert result == set()
 
-    def test_hardlinked_orphan_cleaned_with_mapped_remote_dir(self, tmp_path):
-        """Inode matching must stat the remote_dir path when root_dir differs."""
-        now = time.time()
-        root_dir = "/data/torrents"
-        movies_dir = tmp_path / "Movies"
-        movies_dir.mkdir()
 
-        tracked_host = movies_dir / "tracked.mkv"
-        tracked_host.write_text("data")
-        orphan_host = movies_dir / "orphan_hardlink.mkv"
-        os.link(tracked_host, orphan_host)
-        os.utime(tracked_host, (now, now))
+class TestFindOrphanedFiles:
+    """Test the Unicode-normalized (NFC) diff between disk files and torrent files."""
 
-        tracked_root = f"{root_dir}/Movies/tracked.mkv"
-        orphan_root = f"{root_dir}/Movies/orphan_hardlink.mkv"
+    def test_nfd_disk_file_matches_nfc_torrent_file(self):
+        """A file stored in NFD on disk must not be flagged when tracked in NFC."""
+        # "í" precomposed (NFC, torrent metadata) vs decomposed (NFD, APFS walk):
+        # visually identical, different byte sequences — raw diff would orphan it.
+        nfc_path = "/data/torrents/Album/06 - Para\u00edsos Quemados.flac"
+        nfd_path = "/data/torrents/Album/06 - Parai\u0301sos Quemados.flac"
+        assert nfc_path != nfd_path  # sanity: raw set difference would flag it
 
-        cfg = FakeConfig()
-        cfg.root_dir = root_dir
-        cfg.remote_dir = str(tmp_path)
-        cfg.orphaned["min_file_age_minutes"] = 14400
+        assert find_orphaned_files({nfd_path}, {nfc_path}) == set()
 
-        ro = make_remove_orphaned(_make_qbt(config=cfg))
-        result = ro._filter_too_new({orphan_root}, {tracked_root}, now)
+    def test_nfc_disk_file_matches_nfd_torrent_file(self):
+        """Reverse direction: NFC on disk, NFD reported by qBittorrent."""
+        nfc_path = "/data/torrents/Album/Album-N\u00e9.flac"
+        nfd_path = "/data/torrents/Album/Album-N" + "e\u0301" + ".flac"
 
-        assert orphan_root in result
+        assert find_orphaned_files({nfc_path}, {nfd_path}) == set()
+
+    def test_true_orphan_still_detected(self):
+        """A file not tracked by any torrent is still flagged, ASCII or not."""
+        torrent_files = {"/data/torrents/Album/track1.flac"}
+        root_files = {
+            "/data/torrents/Album/track1.flac",
+            "/data/torrents/Album/Parai\u0301sos Quemados.flac",  # untracked, NFD
+            "/data/torrents/Album/untracked.txt",
+        }
+
+        result = find_orphaned_files(root_files, torrent_files)
+
+        assert result == {
+            "/data/torrents/Album/Parai\u0301sos Quemados.flac",
+            "/data/torrents/Album/untracked.txt",
+        }
+
+    def test_original_disk_paths_preserved(self):
+        """Returned orphan paths keep their on-disk (NFD) form for stat/move/delete."""
+        nfd_orphan = "/data/torrents/Album/N" + "e\u0301" + "w Orphan.flac"
+        nfc_tracked = "/data/torrents/Album/Tr" + "a\u00ed" + "cked.flac"
+        nfd_tracked = "/data/torrents/Album/Tr" + "ai\u0301" + "cked.flac"
+
+        result = find_orphaned_files({nfd_orphan, nfd_tracked}, {nfc_tracked})
+
+        assert result == {nfd_orphan}  # NFD form kept, not the NFC-normalized form
+
+    def test_empty_inputs(self):
+        """Empty inputs produce an empty result set."""
+        assert find_orphaned_files(set(), set()) == set()
+        assert find_orphaned_files({"a.flac"}, set()) == {"a.flac"}
+        assert find_orphaned_files(set(), {"a.flac"}) == set()
+
+    def test_japanese_and_cyrillic_paths(self):
+        """CJK (dakuten) and Cyrillic filenames are also normalized correctly."""
+        # "ド" precomposed vs decomposed (kana + combining dakuten)
+        nfc_path = "/data/torrents/\u30c9\u30e9\u30a4\u30d6/track.flac"
+        nfd_path = "/data/torrents/\u30c8\u3099\u30e9\u30a4\u30d5\u3099/track.flac"
+
+        assert find_orphaned_files({nfd_path}, {nfc_path}) == set()
